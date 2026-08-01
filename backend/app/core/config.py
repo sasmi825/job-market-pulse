@@ -1,4 +1,5 @@
 from functools import lru_cache
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -40,15 +41,38 @@ class Settings(BaseSettings):
 
     @field_validator("database_url")
     @classmethod
-    def _normalise_driver(cls, v: str) -> str:
-        # Managed Postgres add-ons hand out `postgresql://` (or `postgres://`),
-        # but the async engine needs an async driver or it fails at startup
-        # with an unhelpful "dialect does not support async".
+    def _normalise_dsn(cls, v: str) -> str:
+        """
+        Make a managed provider's connection string usable by asyncpg.
+
+        Providers hand out libpq-style DSNs that the async stack rejects in two
+        different ways, both of which fail at startup with opaque errors:
+
+        1. `postgres://` / `postgresql://` — the sync driver. Produces
+           "dialect does not support async".
+        2. `?sslmode=require` — Render's External Database URL includes this,
+           and SQLAlchemy passes it straight through to asyncpg, which doesn't
+           take that keyword: "connect() got an unexpected keyword argument
+           'sslmode'". The asyncpg dialect spells it `ssl`, and accepts the
+           same libpq values, so the parameter is renamed rather than dropped —
+           dropping it would silently downgrade a connection meant to be
+           encrypted.
+        """
         if v.startswith("postgres://"):
             v = v.replace("postgres://", "postgresql://", 1)
         if v.startswith("postgresql://"):
             v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
-        return v
+
+        parts = urlsplit(v)
+        if not parts.query:
+            return v
+
+        params = parse_qsl(parts.query, keep_blank_values=True)
+        if not any(key == "sslmode" for key, _ in params):
+            return v
+
+        renamed = [("ssl" if key == "sslmode" else key, val) for key, val in params]
+        return urlunsplit(parts._replace(query=urlencode(renamed)))
 
     @model_validator(mode="after")
     def _guard_production(self) -> "Settings":

@@ -1,0 +1,44 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# Optional: Render's dashboard flow (New > Blueprint) can read this instead of
+# clicking the service together by hand. The README documents the manual steps.
+
+services:
+  - name: job-market-pulse-api
+    type: web
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      # Render generates a strong value and keeps it secret. Read it from the
+      # dashboard to trigger the pipeline.
+      - key: PIPELINE_TOKEN
+        generateValue: true
+      # Set after the Vercel deployment exists, e.g.
+      # https://job-market-pulse.vercel.app
+      - key: CORS_ORIGINS
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: job-market-pulse-db
+          property: connectionString
+
+  # Redis is NOT provisioned. The `redis` package is installed and REDIS_URL is
+  # configured, but no application code connects to it yet — provisioning it
+  # today would be a paid-for no-op. Uncomment this block and the REDIS_URL var
+  # above once something actually caches.
+  #
+  # - name: job-market-pulse-cache
+  #   type: keyvalue          # `redis` is a deprecated alias for this
+  #   plan: free
+  #   ipAllowList: []         # internal connections only
+
+databases:
+  - name: job-market-pulse-db
+    databaseName: job_market_pulse
+    user: pulse
+    plan: free

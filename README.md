@@ -108,50 +108,118 @@ lever       veeva       OK         786
 
 ## Deployment
 
-Backend on Railway, dashboard on Vercel.
+Backend, Postgres and Redis on **Render**; dashboard on **Vercel**.
 
-**Backend (Railway)**
+A `render.yaml` Blueprint at the repo root describes the backend and database,
+so **New → Blueprint** can provision both in one step. The manual path is below.
 
-1. New project → Deploy from GitHub repo → set the service **Root Directory** to
-   `backend`. The Dockerfile is detected via `backend/railway.json`.
-2. Add the **PostgreSQL** and **Redis** plugins. Both inject their connection
-   URLs automatically; `postgres://` is rewritten to `postgresql+asyncpg://` at
-   startup, so no manual editing is needed.
-3. Set these service variables:
+### 1. Database (Render Postgres)
+
+1. **New → Postgres**. Name it `job-market-pulse-db`, database `job_market_pulse`,
+   user `pulse`, and pick the same region you'll use for the web service.
+2. From the instance's **Info** page, copy the **Internal Database URL** — not
+   the External one. Internal keeps traffic inside Render's network: it's faster,
+   free of egress, and avoids the SSL requirement that external connections
+   carry.
+
+Both URL styles work either way. The app rewrites the connection string at
+startup, so nothing needs hand-editing:
+
+| Render gives you | App uses |
+|---|---|
+| `postgresql://…/db` | `postgresql+asyncpg://…/db` |
+| `postgresql://…/db?sslmode=require` | `postgresql+asyncpg://…/db?ssl=require` |
+
+That second rewrite matters. Render's **External** URL ends in `?sslmode=require`,
+and `sslmode` is a libpq spelling that asyncpg does not accept — pasted in
+unmodified it kills the app at boot with
+`TypeError: connect() got an unexpected keyword argument 'sslmode'`. The
+parameter is renamed to `ssl` rather than dropped, so an encrypted connection
+stays encrypted.
+
+### 2. Redis (optional — currently unused)
+
+**Nothing in the application connects to Redis yet.** The `redis` package is
+installed and `REDIS_URL` is wired through config, but no code path uses it, so
+provisioning an instance today buys nothing. It's left out of `render.yaml`
+deliberately. When caching does land:
+
+1. **New → Key Value** (Render's rename of Redis), name it
+   `job-market-pulse-cache`, `ipAllowList` empty for internal-only access.
+2. Copy its **Internal Key Value URL** into the web service's `REDIS_URL`.
+3. Uncomment the `keyvalue` block and the `REDIS_URL` var in `render.yaml`.
+
+### 3. Backend (Render Web Service)
+
+1. **New → Web Service** → connect the GitHub repo.
+2. **Runtime** `Docker`, **Root Directory** `backend`, **Dockerfile Path**
+   `./Dockerfile`. **Health Check Path** `/health`.
+3. Environment variables:
 
    | Variable | Value |
    |---|---|
    | `ENVIRONMENT` | `production` |
-   | `PIPELINE_TOKEN` | a long random string (see below) |
+   | `DATABASE_URL` | the Internal Database URL from step 1 |
+   | `PIPELINE_TOKEN` | a long random string (below) |
    | `CORS_ORIGINS` | your Vercel URL, e.g. `https://job-market-pulse.vercel.app` |
 
    ```bash
    python -c "import secrets; print(secrets.token_urlsafe(32))"
    ```
 
-4. Generate a public domain for the service and note the URL.
+4. Deploy, then note the service URL (`https://<name>.onrender.com`).
+
+No start command is needed — the Dockerfile's `CMD` binds `0.0.0.0` on `$PORT`,
+which Render injects (default `10000`). The image runs as a non-root user, which
+is fine because that port is above 1024.
 
 The app **refuses to boot** in production if `DATABASE_URL` still contains the
-development password or if `PIPELINE_TOKEN` is unset — a loud failure beats a
+development password, or if `PIPELINE_TOKEN` is unset — a loud failure beats a
 publicly-triggerable scraper.
 
-**Frontend (Vercel)**
+### 4. Frontend (Vercel)
 
-1. Import the same repo → set **Root Directory** to `frontend`.
-2. Set `NEXT_PUBLIC_API_URL` to `https://<your-railway-domain>/api/v1`.
+1. Import the same repo → **Root Directory** `frontend`.
+2. Set `NEXT_PUBLIC_API_URL` to `https://<your-render-service>.onrender.com/api/v1`.
    This is inlined at build time, so it must be set *before* the first build;
    changing it later needs a redeploy, not just a restart.
-3. Deploy, then add the resulting domain to `CORS_ORIGINS` on Railway.
+3. Deploy, then add the resulting domain to `CORS_ORIGINS` on Render.
 
-**Seeding data after deploy** — the pipeline is manual-trigger, so a fresh
-deployment has an empty database until you run:
+### 5. Seed the data
+
+The pipeline is manual-trigger, so a fresh deployment has an **empty database**
+and a dashboard full of zeroes until you run:
 
 ```bash
-curl -X POST https://<your-railway-domain>/api/v1/pipeline/run \
+curl -X POST https://<your-render-service>.onrender.com/api/v1/pipeline/run \
   -H "X-Pipeline-Token: $PIPELINE_TOKEN"
 ```
 
 A full run scrapes 19 boards and takes several minutes.
+
+### Render deployment notes
+
+- **Free-tier services spin down after ~15 minutes of inactivity.** The next
+  request pays a **cold start of roughly 30–50 seconds** while the container
+  restarts. Worth knowing before a live demo — hit the URL once to warm it up
+  beforehand. A paid instance type removes the spin-down.
+- A cold start can also make the *first* pipeline run appear to hang. It hasn't;
+  the container is still booting.
+- **Free Postgres instances expire** after Render's trial window and are deleted.
+  Check the current policy on the instance page if this is meant to live long-term.
+- Use **Internal** URLs for the database from the web service. External URLs
+  route over the public internet, are slower, and require the SSL parameter
+  handling described above.
+
+### Deploying to Railway instead
+
+Railway remains a viable target and needs no code changes — the hardening here
+(pipeline token, `CORS_ORIGINS`, credential guard, `$PORT`, DSN rewriting) is
+platform-neutral. `backend/railway.json` is still in the repo. The differences
+are only operational: point the service's **Root Directory** at `backend`, add
+the PostgreSQL plugin (its `postgres://` URL is rewritten the same way), and set
+the same four environment variables. Railway has no free-tier spin-down, so the
+cold-start caveat above doesn't apply.
 
 ## Known Limitations & Next Steps
 
