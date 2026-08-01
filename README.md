@@ -86,6 +86,26 @@ go stale as companies switch ATS. The pipeline reports per-company failures in
 its response (`stats.sources`) and flags a wholly dead source in
 `stats.sources_failed`, so silent half-coverage is visible rather than assumed.
 
+## Maintenance
+
+Run `python backend/scripts/validate_slugs.py` periodically to catch stale
+company slugs before they silently degrade coverage. This is a known limitation
+of hand-maintained scraper configs; a scheduled CI job is a natural next step.
+
+The script pings every configured Greenhouse and Lever slug, prints a summary
+table, and exits non-zero if any slug is dead — so it can be dropped into CI
+unchanged. Live boards returning fewer than 3 jobs are flagged `LOW`, since a
+near-empty board usually means a migration in progress rather than a clean 404.
+
+```
+SOURCE      SLUG        STATUS    JOBS  DETAIL
+greenhouse  stripe      OK         548
+greenhouse  netlify     OK           4
+lever       veeva       OK         786
+----------------------------------------------
+19 slugs checked  |  19 live, 0 dead, 0 low  |  3,801 jobs
+```
+
 ## Project Status
 
 - [x] Database schema and models
