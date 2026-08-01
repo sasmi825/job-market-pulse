@@ -57,6 +57,30 @@ for category, skills in SKILL_TAXONOMY.items():
         _SKILL_LOOKUP[skill.lower()] = (skill, category)
 
 
+# Some skill names are also ordinary English words, so a plain word-boundary
+# match on the lowercased text produces mostly noise — "Go" was matching the
+# verb in titles like "Manager, Guest Services". These patterns run against the
+# original-cased text and demand a language signal nearby.
+_LANGUAGE_NEIGHBOURS = r"Rust|Java|Python|Ruby|Node|Scala|Kotlin|Elixir|C\+\+"
+
+_AMBIGUOUS_PATTERNS: dict[str, re.Pattern] = {
+    "Go": re.compile(
+        # Golang is unambiguous on its own.
+        r"\bGolang\b"
+        # "Go programming", "Go developer", "Go services", "goroutines"
+        r"|\bGo\s+(?:programming|lang(?:uage)?|developer|engineer|service|services|routine|routines)\b"
+        r"|\bgoroutines?\b"
+        # "written in Go", "experience with Go", "using Go"
+        r"|\b(?:in|with|using|know|knowledge\s+of|experience\s+in)\s+Go\b"
+        # Listed alongside other languages: "Go, Rust" / "Python/Go"
+        rf"|\bGo\s*[/,]\s*(?:{_LANGUAGE_NEIGHBOURS})\b"
+        rf"|\b(?:{_LANGUAGE_NEIGHBOURS})\s*[/,]\s*Go\b"
+        # Parenthesised in titles: "Backend Engineer (Go)"
+        r"|\(\s*Go\s*\)",
+    ),
+}
+
+
 def extract_skills(text: str) -> list[dict]:
     """
     Extract skills from a job description.
@@ -69,12 +93,17 @@ def extract_skills(text: str) -> list[dict]:
     text_lower = text.lower()
 
     for normalized, (canonical, category) in _SKILL_LOOKUP.items():
-        # Use word boundary matching to avoid false positives
-        # e.g. "React" shouldn't match "reactive"
-        pattern = r'\b' + re.escape(normalized) + r'\b'
-        if re.search(pattern, text_lower):
-            # Count occurrences for confidence weighting
+        if canonical in _AMBIGUOUS_PATTERNS:
+            # Context-sensitive match against the original casing.
+            count = len(_AMBIGUOUS_PATTERNS[canonical].findall(text))
+        else:
+            # Use word boundary matching to avoid false positives
+            # e.g. "React" shouldn't match "reactive"
+            pattern = r'\b' + re.escape(normalized) + r'\b'
             count = len(re.findall(pattern, text_lower))
+
+        if count:
+            # Count occurrences for confidence weighting
             confidence = min(1.0, 0.5 + (count * 0.15))
 
             if canonical not in found:

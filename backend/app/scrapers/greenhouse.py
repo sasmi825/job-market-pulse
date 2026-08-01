@@ -8,9 +8,12 @@ No auth required. Returns JSON with all active postings.
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 
 import httpx
+
+from app.pipeline.text_utils import clean_html
 
 logger = logging.getLogger(__name__)
 
@@ -78,19 +81,55 @@ def _normalize_job(raw: dict, company_slug: str) -> dict:
 
 
 def _extract_salary(raw: dict) -> tuple[float | None, float | None]:
-    """Try to pull salary from Greenhouse metadata fields."""
+    """Pull a salary range from Greenhouse metadata, falling back to the description."""
     # Greenhouse sometimes puts pay range in metadata
     for field in raw.get("metadata", []):
         name = (field.get("name") or "").lower()
         value = field.get("value") or ""
         if any(kw in name for kw in ["salary", "compensation", "pay"]):
-            return _parse_salary_range(str(value))
+            low, high = _parse_salary_range(str(value))
+            if low is not None:
+                return low, high
+
+    # Most boards leave metadata empty and put the range in the posting body.
+    return _parse_salary_from_text(clean_html(raw.get("content", "")))
+
+
+# "$120,000 - $180,000", "$120,000 — $180,000", "$120K to $180K"
+_SALARY_RANGE_RE = re.compile(
+    r"\$\s*([\d,]+(?:\.\d+)?\s*[kK]?)"
+    r"\s*(?:-|–|—|to|through)\s*"
+    r"\$?\s*([\d,]+(?:\.\d+)?\s*[kK]?)"
+)
+
+
+def _parse_salary_from_text(text: str) -> tuple[float | None, float | None]:
+    """Scan prose for a dollar-denominated pay range."""
+    if not text:
+        return None, None
+
+    for match in _SALARY_RANGE_RE.finditer(text):
+        low = _parse_salary_value(match.group(1))
+        high = _parse_salary_value(match.group(2))
+        # Guard against equity grants, hourly rates and stray dollar figures.
+        if low and high and low >= 10000 and high >= low:
+            return low, high
     return None, None
+
+
+def _parse_salary_value(val: str) -> float | None:
+    """Parse '120,000' or '120K' into a float."""
+    try:
+        val = val.replace(",", "").strip()
+        if val.lower().endswith("k"):
+            return float(val[:-1].strip()) * 1000
+        return float(val)
+    except ValueError:
+        return None
 
 
 def _parse_salary_range(text: str) -> tuple[float | None, float | None]:
     """Extract min/max salary from text like '$120,000 - $180,000'."""
-    import re
     numbers = re.findall(r'[\$]?\s*([\d,]+(?:\.\d+)?)', text)
     if len(numbers) >= 2:
         try:

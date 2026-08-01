@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.models.models import Job, Company, Skill, JobSkill, DailySnapshot
 from app.scrapers import greenhouse, lever
 from app.pipeline.skill_extractor import extract_skills, detect_seniority, detect_location_type
+from app.pipeline.text_utils import clean_html
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,8 @@ async def run_full_pipeline(db: AsyncSession) -> dict:
     # 2. Process and store each job
     for raw in raw_jobs:
         try:
-            result = await _process_single_job(db, raw)
+            result, skills_linked = await _process_single_job(db, raw)
+            stats["skills_linked"] += skills_linked
             if result == "new":
                 stats["new_jobs"] += 1
             elif result == "updated":
@@ -54,8 +56,11 @@ async def run_full_pipeline(db: AsyncSession) -> dict:
     return stats
 
 
-async def _process_single_job(db: AsyncSession, raw: dict) -> str:
-    """Process a single scraped job. Returns 'new', 'updated', or 'skipped'."""
+async def _process_single_job(db: AsyncSession, raw: dict) -> tuple[str, int]:
+    """
+    Process a single scraped job.
+    Returns ('new' | 'updated' | 'skipped', number of skills linked).
+    """
 
     # Ensure company exists
     company = await _get_or_create_company(db, raw["company_name"], raw.get("company_slug"))
@@ -69,14 +74,17 @@ async def _process_single_job(db: AsyncSession, raw: dict) -> str:
     )
     existing_job = existing.scalar_one_or_none()
 
-    # Extract skills from description
+    # Extract skills from description. The boards return escaped markup, so
+    # strip it down to prose first — otherwise the extractor matches the tags
+    # and "HTML" outranks every real skill.
     description = raw.get("description", "") or ""
     title = raw.get("title", "") or ""
-    combined_text = f"{title} {description}"
+    description_text = clean_html(description)
+    combined_text = f"{title} {description_text}"
 
     extracted_skills = extract_skills(combined_text)
     seniority = detect_seniority(title)
-    location_type = detect_location_type(f"{raw.get('location', '')} {description}")
+    location_type = detect_location_type(f"{raw.get('location', '')} {description_text}")
 
     if existing_job:
         # Update existing job
@@ -91,8 +99,8 @@ async def _process_single_job(db: AsyncSession, raw: dict) -> str:
         existing_job.is_active = True
 
         # Re-link skills
-        await _link_skills(db, existing_job, extracted_skills)
-        return "updated"
+        linked = await _link_skills(db, existing_job, extracted_skills)
+        return "updated", linked
     else:
         # Create new job
         job = Job(
@@ -112,8 +120,8 @@ async def _process_single_job(db: AsyncSession, raw: dict) -> str:
         db.add(job)
         await db.flush()  # get the job.id
 
-        await _link_skills(db, job, extracted_skills)
-        return "new"
+        linked = await _link_skills(db, job, extracted_skills)
+        return "new", linked
 
 
 async def _get_or_create_company(db: AsyncSession, name: str, slug: str | None = None) -> Company:
@@ -138,17 +146,20 @@ async def _get_or_create_skill(db: AsyncSession, name: str, category: str) -> Sk
     return skill
 
 
-async def _link_skills(db: AsyncSession, job: Job, extracted: list[dict]):
-    """Create job-skill associations."""
+async def _link_skills(db: AsyncSession, job: Job, extracted: list[dict]) -> int:
+    """Create job-skill associations. Returns how many links were made."""
     # Clear existing links
     await db.execute(
         JobSkill.__table__.delete().where(JobSkill.job_id == job.id)
     )
 
+    linked = 0
     for skill_data in extracted:
         skill = await _get_or_create_skill(db, skill_data["name"], skill_data["category"])
         link = JobSkill(job_id=job.id, skill_id=skill.id, confidence=skill_data["confidence"])
         db.add(link)
+        linked += 1
+    return linked
 
 
 async def _generate_snapshot(db: AsyncSession):

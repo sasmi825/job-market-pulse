@@ -37,7 +37,7 @@ cd job-market-pulse
 cp backend/.env.example backend/.env
 
 # 3. Start services
-docker compose up -d
+docker-compose up -d
 
 # 4. Run the pipeline (scrape + process + store)
 curl -X POST http://localhost:8000/api/v1/pipeline/run
