@@ -4,3 +4,8 @@ out/
 .env.local
 next-env.d.ts
 *.tsbuildinfo
+.vercel
+.env*
+# Added by the Vercel CLI, which writes a VERCEL_OIDC_TOKEN into .env.local.
+# The template is documentation, not a secret — keep it visible.
+!.env.example
