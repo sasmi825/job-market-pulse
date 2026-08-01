@@ -14,26 +14,25 @@ from datetime import datetime, timezone
 import httpx
 
 from app.pipeline.text_utils import clean_html
+from app.scrapers.base import ScrapeResult
 
 logger = logging.getLogger(__name__)
 
 # Companies to scrape — add more as you discover them
 # Find slugs at: https://boards.greenhouse.io/{slug}
+# notion, plaid, anduril, ramp and rippling were removed — all five 404 now,
+# having moved off Greenhouse. Slugs need periodic revalidation; the pipeline
+# reports per-company failures in its stats so this stays visible.
 GREENHOUSE_COMPANIES = [
     "airbnb",
     "stripe",
     "figma",
-    "notion",
     "discord",
     "coinbase",
     "netlify",
     "gusto",
     "brex",
-    "plaid",
     "verkada",
-    "anduril",
-    "ramp",
-    "rippling",
     "faire",
 ]
 
@@ -41,26 +40,26 @@ BASE_URL = "https://boards-api.greenhouse.io/v1/boards"
 
 
 async def fetch_company_jobs(client: httpx.AsyncClient, company_slug: str) -> list[dict]:
-    """Fetch all jobs for a single Greenhouse company."""
+    """
+    Fetch all jobs for a single Greenhouse company.
+
+    Raises on failure so the caller can tell a dead board apart from one with
+    no current openings.
+    """
     url = f"{BASE_URL}/{company_slug}/jobs"
-    try:
-        resp = await client.get(url, params={"content": "true"})
-        resp.raise_for_status()
-        data = resp.json()
-        jobs = data.get("jobs", [])
-        logger.info(f"[greenhouse] {company_slug}: found {len(jobs)} jobs")
-        return [_normalize_job(job, company_slug) for job in jobs]
-    except httpx.HTTPStatusError as e:
-        logger.warning(f"[greenhouse] {company_slug}: HTTP {e.response.status_code}")
-        return []
-    except Exception as e:
-        logger.error(f"[greenhouse] {company_slug}: {e}")
-        return []
+    resp = await client.get(url, params={"content": "true"})
+    resp.raise_for_status()
+    data = resp.json()
+    jobs = data.get("jobs", [])
+    logger.info(f"[greenhouse] {company_slug}: found {len(jobs)} jobs")
+    return [_normalize_job(job, company_slug) for job in jobs]
 
 
 def _normalize_job(raw: dict, company_slug: str) -> dict:
     """Transform raw Greenhouse JSON into our internal schema."""
-    location = raw.get("location", {}).get("name", "")
+    # `or {}` rather than a .get default: these keys are often present but
+    # null, and a default only applies when the key is missing entirely.
+    location = (raw.get("location") or {}).get("name", "")
 
     # Parse salary from metadata if present
     salary_min, salary_max = _extract_salary(raw)
@@ -82,8 +81,11 @@ def _normalize_job(raw: dict, company_slug: str) -> dict:
 
 def _extract_salary(raw: dict) -> tuple[float | None, float | None]:
     """Pull a salary range from Greenhouse metadata, falling back to the description."""
-    # Greenhouse sometimes puts pay range in metadata
-    for field in raw.get("metadata", []):
+    # Greenhouse sometimes puts pay range in metadata. Stripe, Figma and
+    # Netlify send `"metadata": null`, which the old `.get("metadata", [])`
+    # turned into `for field in None` — a TypeError that the caller's blanket
+    # except swallowed, silently dropping all 728 of their postings.
+    for field in raw.get("metadata") or []:
         name = (field.get("name") or "").lower()
         value = field.get("value") or ""
         if any(kw in name for kw in ["salary", "compensation", "pay"]):
@@ -170,28 +172,41 @@ def _slug_to_name(slug: str) -> str:
         "airbnb": "Airbnb",
         "stripe": "Stripe",
         "figma": "Figma",
-        "notion": "Notion",
         "discord": "Discord",
         "coinbase": "Coinbase",
         "netlify": "Netlify",
         "gusto": "Gusto",
         "brex": "Brex",
-        "plaid": "Plaid",
         "verkada": "Verkada",
-        "anduril": "Anduril",
-        "ramp": "Ramp",
-        "rippling": "Rippling",
         "faire": "Faire",
     }
     return name_overrides.get(slug, slug.replace("-", " ").title())
 
 
-async def scrape_all() -> list[dict]:
-    """Scrape all configured Greenhouse companies."""
-    all_jobs = []
+async def scrape_all() -> ScrapeResult:
+    """Scrape all configured Greenhouse companies, recording per-company failures."""
+    result = ScrapeResult(source="greenhouse", attempted=len(GREENHOUSE_COMPANIES))
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         for slug in GREENHOUSE_COMPANIES:
-            jobs = await fetch_company_jobs(client, slug)
-            all_jobs.extend(jobs)
-    logger.info(f"[greenhouse] total scraped: {len(all_jobs)} jobs")
-    return all_jobs
+            try:
+                jobs = await fetch_company_jobs(client, slug)
+            except httpx.HTTPStatusError as e:
+                logger.warning(f"[greenhouse] {slug}: HTTP {e.response.status_code}")
+                result.failed_companies.append(slug)
+                continue
+            except Exception as e:
+                logger.error(f"[greenhouse] {slug}: {e}")
+                result.failed_companies.append(slug)
+                continue
+
+            if jobs:
+                result.jobs.extend(jobs)
+            else:
+                result.empty_companies.append(slug)
+
+    logger.info(
+        f"[greenhouse] total scraped: {len(result.jobs)} jobs "
+        f"({len(result.failed_companies)} of {result.attempted} companies failed)"
+    )
+    return result

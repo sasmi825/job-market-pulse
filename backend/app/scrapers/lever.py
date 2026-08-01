@@ -12,48 +12,50 @@ from datetime import datetime
 
 import httpx
 
+from app.scrapers.base import ScrapeResult
+
 logger = logging.getLogger(__name__)
 
+# Every slug in the original list (netflix, github, vercel, databricks, …) now
+# 404s — those companies moved off Lever. The v0 API itself is fine; there is
+# just no directory endpoint, so slugs have to be verified by hand. Each of
+# these was confirmed to return postings before being added.
 LEVER_COMPANIES = [
-    "netflix",
-    "twitch",
-    "databricks",
-    "cloudflare",
-    "github",
-    "vercel",
-    "linear",
-    "supabase",
-    "planetscale",
-    "retool",
-    "loom",
-    "dbt-labs",
+    "veeva",
+    "lyrahealth",
+    "shieldai",
+    "matchgroup",
+    "ro",
+    "anchorage",
+    "neon",
+    "tala",
+    "alloy",
 ]
 
 BASE_URL = "https://api.lever.co/v0/postings"
 
 
 async def fetch_company_jobs(client: httpx.AsyncClient, company_slug: str) -> list[dict]:
-    """Fetch all jobs for a single Lever company."""
+    """
+    Fetch all jobs for a single Lever company.
+
+    Raises on failure so the caller can distinguish a dead slug from a company
+    that simply has no openings — both used to return [].
+    """
     url = f"{BASE_URL}/{company_slug}"
-    try:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        postings = resp.json()
-        if not isinstance(postings, list):
-            return []
-        logger.info(f"[lever] {company_slug}: found {len(postings)} jobs")
-        return [_normalize_job(p, company_slug) for p in postings]
-    except httpx.HTTPStatusError as e:
-        logger.warning(f"[lever] {company_slug}: HTTP {e.response.status_code}")
-        return []
-    except Exception as e:
-        logger.error(f"[lever] {company_slug}: {e}")
-        return []
+    resp = await client.get(url)
+    resp.raise_for_status()
+    postings = resp.json()
+    if not isinstance(postings, list):
+        raise ValueError(f"expected a list of postings, got {type(postings).__name__}")
+    logger.info(f"[lever] {company_slug}: found {len(postings)} jobs")
+    return [_normalize_job(p, company_slug) for p in postings]
 
 
 def _normalize_job(raw: dict, company_slug: str) -> dict:
     """Transform raw Lever JSON into our internal schema."""
-    categories = raw.get("categories", {})
+    # `or {}` — the key is often present but null, which a .get default misses.
+    categories = raw.get("categories") or {}
     location = categories.get("location", "") or ""
     salary_min, salary_max = _extract_salary(raw)
 
@@ -113,28 +115,43 @@ def _parse_timestamp(ts: int | None) -> datetime | None:
 
 def _slug_to_name(slug: str) -> str:
     name_overrides = {
-        "netflix": "Netflix",
-        "twitch": "Twitch",
-        "databricks": "Databricks",
-        "cloudflare": "Cloudflare",
-        "github": "GitHub",
-        "vercel": "Vercel",
-        "linear": "Linear",
-        "supabase": "Supabase",
-        "planetscale": "PlanetScale",
-        "retool": "Retool",
-        "loom": "Loom",
-        "dbt-labs": "dbt Labs",
+        "veeva": "Veeva Systems",
+        "lyrahealth": "Lyra Health",
+        "shieldai": "Shield AI",
+        "matchgroup": "Match Group",
+        "ro": "Ro",
+        "anchorage": "Anchorage Digital",
+        "neon": "Neon",
+        "tala": "Tala",
+        "alloy": "Alloy",
     }
     return name_overrides.get(slug, slug.replace("-", " ").title())
 
 
-async def scrape_all() -> list[dict]:
-    """Scrape all configured Lever companies."""
-    all_jobs = []
+async def scrape_all() -> ScrapeResult:
+    """Scrape all configured Lever companies, recording per-company failures."""
+    result = ScrapeResult(source="lever", attempted=len(LEVER_COMPANIES))
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         for slug in LEVER_COMPANIES:
-            jobs = await fetch_company_jobs(client, slug)
-            all_jobs.extend(jobs)
-    logger.info(f"[lever] total scraped: {len(all_jobs)} jobs")
-    return all_jobs
+            try:
+                jobs = await fetch_company_jobs(client, slug)
+            except httpx.HTTPStatusError as e:
+                logger.warning(f"[lever] {slug}: HTTP {e.response.status_code}")
+                result.failed_companies.append(slug)
+                continue
+            except Exception as e:
+                logger.error(f"[lever] {slug}: {e}")
+                result.failed_companies.append(slug)
+                continue
+
+            if jobs:
+                result.jobs.extend(jobs)
+            else:
+                result.empty_companies.append(slug)
+
+    logger.info(
+        f"[lever] total scraped: {len(result.jobs)} jobs "
+        f"({len(result.failed_companies)} of {result.attempted} companies failed)"
+    )
+    return result

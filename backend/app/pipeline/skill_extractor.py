@@ -48,6 +48,17 @@ SKILL_TAXONOMY: dict[str, list[str]] = {
         "CI/CD", "Agile", "Scrum", "TDD",
         "OAuth", "JWT", "SSO",
     ],
+    # Business tools dominate the non-engineering roles that previously
+    # extracted nothing — Salesforce alone appeared in 21% of them.
+    "business": [
+        "Salesforce", "Excel", "Jira", "Zendesk", "NetSuite", "Marketo",
+    ],
+    # Postings increasingly describe AI work at concept level ("ML engineering
+    # experience", "Agentic AI products") without naming a framework, so the
+    # concepts themselves have to be trackable.
+    "ai": [
+        "Machine Learning", "LLM", "Generative AI", "Agentic AI",
+    ],
 }
 
 # Build a lookup: normalized_name -> (canonical_name, category)
@@ -55,6 +66,9 @@ _SKILL_LOOKUP: dict[str, tuple[str, str]] = {}
 for category, skills in SKILL_TAXONOMY.items():
     for skill in skills:
         _SKILL_LOOKUP[skill.lower()] = (skill, category)
+
+# Every canonical name, for callers that need to know what we track.
+TRACKED_SKILL_NAMES: set[str] = {name for name, _ in _SKILL_LOOKUP.values()}
 
 
 # Some skill names are also ordinary English words, so a plain word-boundary
@@ -78,6 +92,22 @@ _AMBIGUOUS_PATTERNS: dict[str, re.Pattern] = {
         # Parenthesised in titles: "Backend Engineer (Go)"
         r"|\(\s*Go\s*\)",
     ),
+    # "excel in this role" / "excel at collaboration" is the verb, and it is far
+    # more common in postings than the spreadsheet.
+    "Excel": re.compile(
+        r"\bMicrosoft\s+Excel\b"
+        r"|\bExcel\b(?!\s+(?:in|at|as|when|with\b))",
+    ),
+    # LLM is also the law degree; these postings include legal roles.
+    "LLM": re.compile(
+        r"\bLLMs?\b(?!\s*(?:degree|program|programme|candidates?))",
+    ),
+    # Proper nouns — matched case-sensitively so ordinary prose can't score.
+    "Salesforce": re.compile(r"\bSalesforce\b"),
+    "Jira": re.compile(r"\bJira\b", re.IGNORECASE),
+    "Zendesk": re.compile(r"\bZendesk\b", re.IGNORECASE),
+    "NetSuite": re.compile(r"\bNetSuite\b", re.IGNORECASE),
+    "Marketo": re.compile(r"\bMarketo\b", re.IGNORECASE),
 }
 
 

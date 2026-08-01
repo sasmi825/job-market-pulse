@@ -13,7 +13,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.models.models import Job, Company, Skill, JobSkill, DailySnapshot
 from app.scrapers import greenhouse, lever
 from app.pipeline.skill_extractor import extract_skills, detect_seniority, detect_location_type
-from app.pipeline.text_utils import clean_html
+from app.pipeline.text_utils import (
+    build_boilerplate_index,
+    clean_for_extraction,
+    clean_html,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,16 +28,43 @@ async def run_full_pipeline(db: AsyncSession) -> dict:
 
     # 1. Scrape all sources
     logger.info("Starting scrape...")
+    results = [await greenhouse.scrape_all(), await lever.scrape_all()]
+
     raw_jobs = []
-    raw_jobs.extend(await greenhouse.scrape_all())
-    raw_jobs.extend(await lever.scrape_all())
+    for result in results:
+        raw_jobs.extend(result.jobs)
+
     stats["scraped"] = len(raw_jobs)
+    stats["sources"] = {r.source: r.summary() for r in results}
+    # A source that yielded nothing while erroring is broken, not quiet. Every
+    # Lever slug 404'd for weeks and the run still reported success.
+    stats["sources_failed"] = sorted(r.source for r in results if r.is_broken)
+
+    for result in results:
+        if result.is_broken:
+            logger.error(
+                f"[{result.source}] SOURCE FAILED — 0 jobs from "
+                f"{result.attempted} companies, all failed"
+            )
+        elif result.failed_companies:
+            logger.warning(
+                f"[{result.source}] {len(result.failed_companies)} of "
+                f"{result.attempted} companies failed: {sorted(result.failed_companies)}"
+            )
+
     logger.info(f"Scraped {len(raw_jobs)} total jobs")
 
-    # 2. Process and store each job
+    # 2. Learn each company's boilerplate before extracting anything. This
+    # needs the whole corpus for a company, so it can't be done per job.
+    boilerplate = _build_company_boilerplate(raw_jobs)
+    stats["boilerplate_sentences"] = sum(len(v) for v in boilerplate.values())
+
+    # 3. Process and store each job
     for raw in raw_jobs:
         try:
-            result, skills_linked = await _process_single_job(db, raw)
+            result, skills_linked = await _process_single_job(
+                db, raw, boilerplate.get(raw.get("company_name", ""), set())
+            )
             stats["skills_linked"] += skills_linked
             if result == "new":
                 stats["new_jobs"] += 1
@@ -48,7 +79,7 @@ async def run_full_pipeline(db: AsyncSession) -> dict:
 
     await db.commit()
 
-    # 3. Generate daily snapshot
+    # 4. Generate daily snapshot
     await _generate_snapshot(db)
     await db.commit()
 
@@ -56,7 +87,44 @@ async def run_full_pipeline(db: AsyncSession) -> dict:
     return stats
 
 
-async def _process_single_job(db: AsyncSession, raw: dict) -> tuple[str, int]:
+def _drop_employer_self_match(extracted: list[dict], company_name: str | None) -> list[dict]:
+    """
+    Drop a skill when it is just the employer's own name.
+
+    Figma names itself throughout all 176 of its postings — in values
+    statements, benefits copy and its careers email address — which made Figma
+    the 4th most "in-demand" skill in the dataset. Those mentions are evidence
+    of who is hiring, not of what they want. Unlike the repeated-sentence
+    boilerplate this survives any frequency threshold, because the mentions are
+    spread across dozens of different sentences.
+    """
+    if not company_name:
+        return extracted
+    employer = company_name.strip().lower()
+    return [s for s in extracted if s["name"].strip().lower() != employer]
+
+
+def _build_company_boilerplate(raw_jobs: list[dict]) -> dict[str, set[str]]:
+    """Map each company to the sentences repeated across nearly all its postings."""
+    by_company: dict[str, list[str]] = {}
+    for raw in raw_jobs:
+        company = raw.get("company_name") or ""
+        by_company.setdefault(company, []).append(clean_html(raw.get("description")))
+
+    index = {company: build_boilerplate_index(texts) for company, texts in by_company.items()}
+
+    for company, sentences in index.items():
+        if sentences:
+            logger.info(
+                f"[boilerplate] {company}: ignoring {len(sentences)} repeated "
+                f"sentence(s) across {len(by_company[company])} postings"
+            )
+    return index
+
+
+async def _process_single_job(
+    db: AsyncSession, raw: dict, boilerplate: set[str] | None = None
+) -> tuple[str, int]:
     """
     Process a single scraped job.
     Returns ('new' | 'updated' | 'skipped', number of skills linked).
@@ -79,10 +147,12 @@ async def _process_single_job(db: AsyncSession, raw: dict) -> tuple[str, int]:
     # and "HTML" outranks every real skill.
     description = raw.get("description", "") or ""
     title = raw.get("title", "") or ""
-    description_text = clean_html(description)
+    description_text = clean_for_extraction(description, boilerplate)
     combined_text = f"{title} {description_text}"
 
-    extracted_skills = extract_skills(combined_text)
+    extracted_skills = _drop_employer_self_match(
+        extract_skills(combined_text), raw.get("company_name")
+    )
     seniority = detect_seniority(title)
     location_type = detect_location_type(f"{raw.get('location', '')} {description_text}")
 
