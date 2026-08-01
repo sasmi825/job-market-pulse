@@ -1,0 +1,76 @@
+name: Daily pipeline
+
+# Keeps the deployed dashboard current. Runs on GitHub-hosted runners, which
+# are free for public repositories — Render's Cron Job service is a paid add-on.
+on:
+  schedule:
+    # 06:00 UTC daily — 11pm Pacific / 2am Eastern. Off-peak for the US job
+    # boards being scraped. GitHub cron is always UTC and does not shift with
+    # daylight saving.
+    - cron: "0 6 * * *"
+  # Lets the workflow be run on demand from the Actions tab.
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    name: Trigger ingestion pipeline
+    runs-on: ubuntu-latest
+    # A full run scrapes 19 boards (~5 min) and the free-tier backend may need
+    # a 30-50s cold start first. This is a backstop, not the expected duration.
+    timeout-minutes: 20
+
+    steps:
+      - name: Trigger pipeline run
+        env:
+          API_URL: https://job-market-pulse.onrender.com/api/v1
+          PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PIPELINE_TOKEN}" ]; then
+            echo "::error::PIPELINE_TOKEN secret is not set. Add it under" \
+                 "Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+          echo "POST ${API_URL}/pipeline/run"
+
+          # --max-time covers the run plus a cold start. Body and status code
+          # are captured separately so a non-2xx can be reported with detail.
+          http_status=$(curl -sS -X POST "${API_URL}/pipeline/run" \
+            -H "X-Pipeline-Token: ${PIPELINE_TOKEN}" \
+            -H "Content-Length: 0" \
+            --max-time 900 \
+            -o response.json \
+            -w "%{http_code}")
+
+          echo "HTTP ${http_status}"
+
+          if [ "${http_status}" != "200" ]; then
+            echo "::error::Pipeline request failed with HTTP ${http_status}"
+            cat response.json || true
+            exit 1
+          fi
+
+          # Summary for the run log.
+          jq -r '.stats | "scraped=\(.scraped) new=\(.new_jobs) updated=\(.updated) skills_linked=\(.skills_linked)"' response.json
+          jq -r '.stats.sources | to_entries[] | "  \(.key): \(.value.jobs) jobs, \(.value.companies_failed | length) companies failed"' response.json
+
+          # A 200 alone is not success. Every Lever slug 404'd for weeks while
+          # the pipeline still returned 200 — surface that as a failed run.
+          failed=$(jq -r '.stats.sources_failed | join(",")' response.json)
+          if [ -n "${failed}" ]; then
+            echo "::error::Source(s) returned no jobs at all: ${failed}"
+            exit 1
+          fi
+
+          # Per-company rot is a warning, not a failure — a single dead slug
+          # shouldn't fail the run, but it should be visible.
+          jq -r '
+            .stats.sources
+            | to_entries[]
+            | select(.value.companies_failed | length > 0)
+            | "::warning::\(.key): dead slug(s): \(.value.companies_failed | join(", "))"
+          ' response.json
+
+          echo "Pipeline completed successfully."
