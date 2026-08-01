@@ -2,6 +2,23 @@
 
 Real-time job market analytics dashboard that tracks skill demand, salary trends, and hiring volume across top tech companies.
 
+**Live:** [dashboard](https://job-market-pulse-three.vercel.app) ·
+[API](https://job-market-pulse.onrender.com) ·
+[interactive API docs](https://job-market-pulse.onrender.com/docs)
+
+> The backend runs on a free tier and spins down after ~15 minutes idle — the
+> first request after a pause takes 30–50 seconds.
+
+## Documentation
+
+| Document | What's in it |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System overview, component boundaries, data model, request lifecycle |
+| [docs/PIPELINE.md](docs/PIPELINE.md) | Ingestion internals — scraping, cleaning, boilerplate detection, extraction |
+| [docs/API.md](docs/API.md) | Full endpoint reference with real examples and error cases |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | Why the code looks the way it does, and the bugs that shaped it |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Local setup, layout, common tasks, conventions, gotchas |
+
 ## Architecture
 
 ```
