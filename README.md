@@ -106,6 +106,67 @@ lever       veeva       OK         786
 19 slugs checked  |  19 live, 0 dead, 0 low  |  3,801 jobs
 ```
 
+## Deployment
+
+Backend on Railway, dashboard on Vercel.
+
+**Backend (Railway)**
+
+1. New project → Deploy from GitHub repo → set the service **Root Directory** to
+   `backend`. The Dockerfile is detected via `backend/railway.json`.
+2. Add the **PostgreSQL** and **Redis** plugins. Both inject their connection
+   URLs automatically; `postgres://` is rewritten to `postgresql+asyncpg://` at
+   startup, so no manual editing is needed.
+3. Set these service variables:
+
+   | Variable | Value |
+   |---|---|
+   | `ENVIRONMENT` | `production` |
+   | `PIPELINE_TOKEN` | a long random string (see below) |
+   | `CORS_ORIGINS` | your Vercel URL, e.g. `https://job-market-pulse.vercel.app` |
+
+   ```bash
+   python -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+
+4. Generate a public domain for the service and note the URL.
+
+The app **refuses to boot** in production if `DATABASE_URL` still contains the
+development password or if `PIPELINE_TOKEN` is unset — a loud failure beats a
+publicly-triggerable scraper.
+
+**Frontend (Vercel)**
+
+1. Import the same repo → set **Root Directory** to `frontend`.
+2. Set `NEXT_PUBLIC_API_URL` to `https://<your-railway-domain>/api/v1`.
+   This is inlined at build time, so it must be set *before* the first build;
+   changing it later needs a redeploy, not just a restart.
+3. Deploy, then add the resulting domain to `CORS_ORIGINS` on Railway.
+
+**Seeding data after deploy** — the pipeline is manual-trigger, so a fresh
+deployment has an empty database until you run:
+
+```bash
+curl -X POST https://<your-railway-domain>/api/v1/pipeline/run \
+  -H "X-Pipeline-Token: $PIPELINE_TOKEN"
+```
+
+A full run scrapes 19 boards and takes several minutes.
+
+## Known Limitations & Next Steps
+
+**Data coverage is inherently fragile.** This project scrapes public job board APIs that companies control and can change without notice — 5 of 12 Lever companies and 5 of 15 Greenhouse companies had gone stale during development. `validate_slugs.py` catches this proactively now, but a scheduled CI job (rather than manual runs) is the natural next step.
+
+**Skill extraction is keyword-based, not semantic.** ~65% of jobs return zero matched skills — mostly genuinely non-technical roles or postings that describe requirements in prose without naming tools, plus some real taxonomy gaps. A more complete fix would move toward NLP-based extraction (spaCy or an LLM-based extractor).
+
+**Company boilerplate required active mitigation.** Repeated company text (client lists, self-descriptions) initially produced misleading rankings — one company's self-description alone put "Agentic AI" at #3 overall. A boilerplate-detection step now strips repeated sentences before extraction, but it's a heuristic, not a guarantee, on new sources.
+
+**Non-English postings aren't filtered.** Some sources return non-English descriptions the English-only taxonomy can't parse, which register indistinguishably from genuinely skill-less postings. Language detection is a planned improvement.
+
+**Resume matching is v1.** It reuses the same keyword taxonomy as job extraction, so it inherits the same blind spots — no semantic understanding, no weighting by how central a skill is to a role.
+
+**Salary data is incomplete.** Only ~27% of postings include parseable salary information, since disclosure depends entirely on what each company chooses to include in the posting text.
+
 ## Project Status
 
 - [x] Database schema and models
@@ -116,4 +177,5 @@ lever       veeva       OK         786
 - [x] Frontend dashboard
 - [ ] Scheduled pipeline (cron/APScheduler)
 - [x] Resume match score feature
+- [ ] Scheduled slug validation (CI)
 - [ ] Deploy to Railway/Render

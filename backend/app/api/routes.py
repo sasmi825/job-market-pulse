@@ -1,11 +1,13 @@
+import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File, Header
 from sqlalchemy import select, func, desc, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.models import Job, Company, Skill, JobSkill, DailySnapshot
 from app.pipeline.ingest import run_full_pipeline
@@ -277,7 +279,25 @@ async def salary_distribution(
 # Pipeline trigger
 # ──────────────────────────────────────────────
 
-@router.post("/pipeline/run")
+def require_pipeline_token(x_pipeline_token: str | None = Header(default=None)) -> None:
+    """
+    Gate the pipeline trigger behind a shared secret.
+
+    A run fans out to 19 external job boards, so an open endpoint on a public
+    URL is both a self-inflicted DoS and a good way to get the deployment's IP
+    blocked by Greenhouse and Lever. Production refuses to boot without a token
+    (see Settings._guard_production); locally, an unset token leaves the
+    endpoint open so the quick-start curl still works.
+    """
+    settings = get_settings()
+    expected = settings.pipeline_token
+    if not expected:
+        return
+    if not x_pipeline_token or not secrets.compare_digest(x_pipeline_token, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Pipeline-Token.")
+
+
+@router.post("/pipeline/run", dependencies=[Depends(require_pipeline_token)])
 async def trigger_pipeline(db: AsyncSession = Depends(get_db)):
     """Manually trigger the ingestion pipeline."""
     stats = await run_full_pipeline(db)
