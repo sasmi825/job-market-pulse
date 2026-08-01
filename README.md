@@ -23,7 +23,7 @@ Data Sources (Greenhouse, Lever)
 - **Backend**: FastAPI (Python 3.12)
 - **Database**: PostgreSQL 16 + Redis 7
 - **Pipeline**: Custom scrapers + keyword-based skill extraction
-- **Frontend**: Next.js 14, Tailwind CSS, Recharts *(coming soon)*
+- **Frontend**: Next.js 14 (App Router), TypeScript, Tailwind CSS, hand-rolled SVG charts
 - **Infra**: Docker Compose
 
 ## Quick Start
@@ -44,6 +44,10 @@ curl -X POST http://localhost:8000/api/v1/pipeline/run
 
 # 5. Explore the API
 open http://localhost:8000/docs
+
+# 6. Start the dashboard
+cd frontend && npm install && npm run dev
+open http://localhost:3000
 ```
 
 ## API Endpoints
@@ -55,6 +59,7 @@ open http://localhost:8000/docs
 | `GET /api/v1/companies/hiring` | Companies by open role count |
 | `GET /api/v1/trends` | Daily time-series snapshots |
 | `GET /api/v1/salaries` | Salary distribution by seniority |
+| `POST /api/v1/resume/analyze` | Score a PDF/txt resume against current demand |
 | `POST /api/v1/pipeline/run` | Trigger ingestion pipeline |
 
 ## Data Sources
@@ -70,7 +75,7 @@ open http://localhost:8000/docs
 - [x] Lever scraper
 - [x] Skill extraction pipeline
 - [x] REST API with filters
-- [ ] Frontend dashboard
+- [x] Frontend dashboard
 - [ ] Scheduled pipeline (cron/APScheduler)
-- [ ] Resume match score feature
+- [x] Resume match score feature
 - [ ] Deploy to Railway/Render

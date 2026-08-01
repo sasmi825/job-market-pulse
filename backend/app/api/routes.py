@@ -1,14 +1,16 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy import select, func, desc
+from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File
+from sqlalchemy import select, func, desc, or_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.core.database import get_db
 from app.models.models import Job, Company, Skill, JobSkill, DailySnapshot
 from app.pipeline.ingest import run_full_pipeline
+from app.pipeline.resume import extract_resume_text, ResumeParseError
+from app.pipeline.skill_extractor import extract_skills
 
 router = APIRouter()
 
@@ -32,13 +34,22 @@ async def list_jobs(
     """List jobs with filters."""
     query = (
         select(Job)
-        .options(joinedload(Job.company))
+        .options(joinedload(Job.company), selectinload(Job.skills).joinedload(JobSkill.skill))
         .where(Job.is_active == True)
         .order_by(desc(Job.posted_at))
     )
 
     if search:
-        query = query.where(Job.title.ilike(f"%{search}%"))
+        # The UI offers one box for "skill or title", so match either. EXISTS
+        # rather than a join keeps one row per job — a join would multiply rows
+        # by matching skills and inflate the total count.
+        skill_match = (
+            select(JobSkill.job_id)
+            .join(Skill, Skill.id == JobSkill.skill_id)
+            .where(JobSkill.job_id == Job.id, Skill.name.ilike(f"%{search}%"))
+            .exists()
+        )
+        query = query.where(or_(Job.title.ilike(f"%{search}%"), skill_match))
     if location:
         query = query.where(Job.location.ilike(f"%{location}%"))
     if location_type:
@@ -75,6 +86,7 @@ async def list_jobs(
                 "source": j.source,
                 "posted_at": j.posted_at.isoformat() if j.posted_at else None,
                 "url": j.url,
+                "skills": [js.skill.name for js in j.skills if js.skill],
             }
             for j in jobs
         ],
@@ -85,14 +97,17 @@ async def list_jobs(
 # Skills (demand ranking)
 # ──────────────────────────────────────────────
 
-@router.get("/skills/top")
-async def top_skills(
-    db: AsyncSession = Depends(get_db),
+async def _skill_demand_rows(
+    db: AsyncSession,
+    limit: int,
+    days: int,
     category: Optional[str] = None,
-    limit: int = Query(default=20, le=50),
-    days: int = Query(default=30, le=90),
 ):
-    """Top skills by demand (number of job postings mentioning them)."""
+    """
+    Skills ranked by how many active postings mention them.
+    Shared by /skills/top and the resume matcher so both score against the
+    same definition of "in demand".
+    """
     cutoff = datetime.utcnow() - timedelta(days=days)
 
     query = (
@@ -108,9 +123,35 @@ async def top_skills(
     query = query.group_by(Skill.name, Skill.category).order_by(desc("demand")).limit(limit)
 
     result = await db.execute(query)
-    rows = result.all()
+    return result.all()
+
+
+@router.get("/skills/top")
+async def top_skills(
+    db: AsyncSession = Depends(get_db),
+    category: Optional[str] = None,
+    limit: int = Query(default=20, le=50),
+    days: int = Query(default=30, le=90),
+):
+    """Top skills by demand (number of job postings mentioning them)."""
+    rows = await _skill_demand_rows(db, limit=limit, days=days, category=category)
+
+    # Callers that want "how many skills do we track" can't infer it from the
+    # returned list, since `limit` caps it at 50.
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    total_query = (
+        select(func.count(func.distinct(Skill.id)))
+        .select_from(Skill)
+        .join(JobSkill, Skill.id == JobSkill.skill_id)
+        .join(Job, Job.id == JobSkill.job_id)
+        .where(Job.is_active == True, Job.scraped_at >= cutoff)
+    )
+    if category:
+        total_query = total_query.where(Skill.category == category)
+    total = (await db.execute(total_query)).scalar() or 0
 
     return {
+        "total": total,
         "period_days": days,
         "skills": [
             {"name": r.name, "category": r.category, "demand": r.demand}
@@ -241,3 +282,60 @@ async def trigger_pipeline(db: AsyncSession = Depends(get_db)):
     """Manually trigger the ingestion pipeline."""
     stats = await run_full_pipeline(db)
     return {"status": "complete", "stats": stats}
+
+
+# ──────────────────────────────────────────────
+# Resume match
+# ──────────────────────────────────────────────
+
+# Scoring against every skill we've ever seen would dilute the result — a
+# resume shouldn't be penalised for missing a skill that three postings want.
+# Scoring against the top slice keeps the number meaningful.
+RESUME_DEMAND_POOL = 20
+RESUME_DEMAND_WINDOW_DAYS = 30
+
+
+@router.post("/resume/analyze")
+async def analyze_resume(
+    db: AsyncSession = Depends(get_db),
+    file: UploadFile = File(...),
+):
+    """
+    Score an uploaded resume against current skill demand.
+
+    Stateless: the file is parsed in memory and discarded — nothing is written
+    to disk or persisted to the database.
+    """
+    raw = await file.read()
+    try:
+        text = extract_resume_text(file.filename or "", raw)
+    except ResumeParseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        await file.close()
+
+    # Same extractor the ingestion pipeline uses, so resume skills and job
+    # skills are drawn from one taxonomy and actually comparable.
+    resume_skills = {s["name"] for s in extract_skills(text)}
+
+    rows = await _skill_demand_rows(
+        db, limit=RESUME_DEMAND_POOL, days=RESUME_DEMAND_WINDOW_DAYS
+    )
+    in_demand = [r.name for r in rows]
+
+    if not in_demand:
+        raise HTTPException(
+            status_code=503,
+            detail="No skill demand data yet — run the ingestion pipeline first.",
+        )
+
+    matched = [name for name in in_demand if name in resume_skills]
+    missing = [name for name in in_demand if name not in resume_skills]
+    score = round(len(matched) / len(in_demand) * 100)
+
+    return {
+        "score": score,
+        "matched_skills": matched,
+        "missing_skills": missing,
+        "resume_skills_found": sorted(resume_skills),
+    }

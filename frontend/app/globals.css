@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Ported from the prototype's <helmet> block. */
+@keyframes jmp-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(1.25);
+  }
+}
+
+@keyframes jmp-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The prototype listed the system font first and IBM Plex Sans as a fallback,
+   which meant it never actually rendered in Plex on a Mac. Plex leads here so
+   the built UI matches the specified typography. */
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI", sans-serif;
+}
+
+a {
+  color: oklch(0.5 0.14 265);
+  text-decoration: none;
+}
+
+a:hover {
+  color: oklch(0.4 0.15 265);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: oklch(0.88 0.006 90);
+  border-radius: 8px;
+}
+
+/* The prototype has no loading states — these back the skeletons added for
+   real data, using the same pulse timing as the design's keyframes. */
+@keyframes jmp-shimmer {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.jmp-skeleton {
+  animation: jmp-shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}
