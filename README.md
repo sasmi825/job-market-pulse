@@ -90,7 +90,8 @@ its response (`stats.sources`) and flags a wholly dead source in
 
 Run `python backend/scripts/validate_slugs.py` periodically to catch stale
 company slugs before they silently degrade coverage. This is a known limitation
-of hand-maintained scraper configs; a scheduled CI job is a natural next step.
+of hand-maintained scraper configs; running it on a schedule alongside the
+daily pipeline workflow is a natural next step.
 
 The script pings every configured Greenhouse and Lever slug, prints a summary
 table, and exits non-zero if any slug is dead — so it can be dropped into CI
@@ -105,6 +106,31 @@ lever       veeva       OK         786
 ----------------------------------------------
 19 slugs checked  |  19 live, 0 dead, 0 low  |  3,801 jobs
 ```
+
+The daily pipeline workflow gives partial coverage of this for free: it emits a
+GitHub Actions **warning** for any company that fails during a run, and **fails
+the run outright** if an entire source returns nothing. Running the script is
+still the way to spot a board that is dying rather than dead.
+
+### Re-seeding after the free database expires
+
+The Render Postgres instance is on the **free tier, which expires roughly 30
+days after creation** and is then deleted along with all its rows. This is
+expected, not a fault — plan for it:
+
+1. Delete the expired instance and create a new free Postgres (same name,
+   database `job_market_pulse`, user `pulse`, same region as the web service).
+2. Copy the new **Internal Database URL** into the web service's `DATABASE_URL`
+   and save — Render redeploys automatically.
+3. Repopulate. Either wait for the next scheduled run at 06:00 UTC, or trigger
+   one immediately from the **Actions** tab → *Daily pipeline* → **Run workflow**.
+
+Tables are recreated automatically at startup, so no migration step is needed.
+Historical `daily_snapshots` rows are lost with the instance, which resets the
+postings-over-time chart — it rebuilds one day per run from then on.
+
+To keep the data permanently, move the database to a paid instance; nothing
+else in this setup requires a paid tier.
 
 ## Deployment
 
@@ -187,15 +213,43 @@ publicly-triggerable scraper.
 
 ### 5. Seed the data
 
-The pipeline is manual-trigger, so a fresh deployment has an **empty database**
-and a dashboard full of zeroes until you run:
+A fresh deployment has an **empty database** and a dashboard full of zeroes
+until the pipeline runs once. Either wait for the daily schedule below, or
+trigger it immediately:
 
 ```bash
 curl -X POST https://<your-render-service>.onrender.com/api/v1/pipeline/run \
   -H "X-Pipeline-Token: $PIPELINE_TOKEN"
 ```
 
-A full run scrapes 19 boards and takes several minutes.
+A full run scrapes 19 boards and takes roughly 5 minutes.
+
+### 6. Scheduled runs (GitHub Actions)
+
+[`.github/workflows/daily-pipeline.yml`](.github/workflows/daily-pipeline.yml)
+triggers the pipeline **daily at 06:00 UTC** (11pm Pacific / 2am Eastern) — off
+peak for the US job boards being scraped. GitHub-hosted runners are free for
+public repositories, which is why the schedule lives here rather than in
+Render's Cron Job service, a paid add-on.
+
+Setup is one secret: repo **Settings → Secrets and variables → Actions → New
+repository secret**, named `PIPELINE_TOKEN`, matching the web service's value.
+
+The workflow also exposes `workflow_dispatch`, so it can be run on demand from
+the **Actions** tab → *Daily pipeline* → **Run workflow** — useful for
+re-seeding without waiting for the schedule.
+
+It does not treat HTTP 200 as success on its own: a source that returns no jobs
+at all fails the run, and individual dead company slugs surface as warnings.
+That distinction matters — every Lever slug 404'd for weeks while the pipeline
+kept returning 200.
+
+> **Note:** GitHub disables scheduled workflows after 60 days of repository
+> inactivity. Any commit re-enables them; `workflow_dispatch` always works.
+
+`backend/scripts/trigger_pipeline.py` does the same thing from any machine with
+Python and no curl — it reads `API_URL` and `PIPELINE_TOKEN` from the
+environment.
 
 ### Render deployment notes
 
@@ -243,7 +297,7 @@ cold-start caveat above doesn't apply.
 - [x] Skill extraction pipeline
 - [x] REST API with filters
 - [x] Frontend dashboard
-- [ ] Scheduled pipeline (cron/APScheduler)
+- [x] Scheduled pipeline (daily via GitHub Actions)
 - [x] Resume match score feature
+- [x] Deployed (Render backend + Postgres, Vercel frontend)
 - [ ] Scheduled slug validation (CI)
-- [ ] Deploy to Railway/Render
