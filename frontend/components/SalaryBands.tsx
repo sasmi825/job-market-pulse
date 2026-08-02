@@ -53,13 +53,7 @@ export function SalaryBands({
           {Array.from({ length: 4 }).map((_, i) => (
             <div
               key={i}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "90px 1fr 150px",
-                alignItems: "center",
-                gap: 14,
-                padding: "9px 0",
-              }}
+              className="jmp-salary-row"
             >
               <Skeleton theme={theme} width={60} height={13} />
               <Skeleton theme={theme} height={10} style={{ borderRadius: 5 }} />
@@ -79,13 +73,7 @@ export function SalaryBands({
           return (
             <div
               key={b.seniority}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "90px 1fr 150px",
-                alignItems: "center",
-                gap: 14,
-                padding: "9px 0",
-              }}
+              className="jmp-salary-row"
             >
               <span style={{ fontSize: 13, fontWeight: 500 }}>
                 {titleCase(b.seniority)}

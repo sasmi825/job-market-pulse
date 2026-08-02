@@ -211,9 +211,9 @@ export default function Page() {
 
   return (
     <div
+      className="jmp-page"
       style={{
         minHeight: "100vh",
-        padding: "32px 40px 80px",
         boxSizing: "border-box",
         color: theme.text,
         background: theme.pageBg,
@@ -251,15 +251,7 @@ export default function Page() {
         onRetry={reload}
       />
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1.1fr 1fr",
-          gap: 16,
-          marginBottom: 24,
-        }}
-        className="jmp-two-col"
-      >
+      <div className="jmp-two-col">
         <SkillsPanel
           theme={theme}
           skills={skills}

@@ -96,7 +96,10 @@ export function JobsTable({
       >
         <CardTitle>Open roles</CardTitle>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div
+          className="jmp-filters"
+          style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}
+        >
           <select
             value={filters.locationType}
             onChange={(e) =>
@@ -132,7 +135,8 @@ export function JobsTable({
             onChange={(e) => onFiltersChange({ ...filters, query: e.target.value })}
             placeholder="Search skill or title"
             aria-label="Search by skill or title"
-            style={{ ...selectStyle, width: 190 }}
+            className="jmp-search"
+            style={selectStyle}
           />
 
           <span
@@ -160,11 +164,8 @@ export function JobsTable({
         <ErrorNote theme={theme} message={error} onRetry={onRetry} />
       ) : (
         <div
-          style={{
-            maxHeight: 560,
-            overflow: "auto",
-            borderTop: `1px solid ${theme.border}`,
-          }}
+          className="jmp-table-wrap"
+          style={{ borderTop: `1px solid ${theme.border}` }}
         >
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>

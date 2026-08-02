@@ -16,6 +16,7 @@ export function Header({
 
   return (
     <div
+      className="jmp-header"
       style={{
         display: "flex",
         alignItems: "center",
@@ -24,8 +25,6 @@ export function Header({
         position: "sticky",
         top: 0,
         zIndex: 5,
-        padding: "14px 20px",
-        margin: "0 -20px 0",
         background: theme.headerBg,
         backdropFilter: "blur(16px)",
         WebkitBackdropFilter: "blur(16px)",

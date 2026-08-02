@@ -68,3 +68,150 @@ a:hover {
   animation: jmp-shimmer 1.4s ease-in-out infinite;
   border-radius: 6px;
 }
+
+/* ──────────────────────────────────────────────────────────────────
+   Responsive layout
+   ──────────────────────────────────────────────────────────────────
+   The design prototype was fixed-width, so layout values lived in inline
+   styles. Inline styles beat class rules, so anything that needs to change
+   at a breakpoint is defined here instead and the inline value removed —
+   rather than fighting specificity with !important.
+
+   Theme colours stay inline: they're driven by React state, not viewport.
+   ────────────────────────────────────────────────────────────────── */
+
+.jmp-page {
+  /* Referenced by the sticky header so its bleed always matches the gutter. */
+  --jmp-gutter: 40px;
+  padding: 32px var(--jmp-gutter) 80px;
+}
+
+/* The header bleeds into the gutter so the sticky bar is wider than content. */
+.jmp-header {
+  padding: 14px 20px;
+  margin: 0 -20px;
+}
+
+.jmp-hero {
+  padding: 56px 4px 40px;
+}
+
+.jmp-hero-title {
+  /* Scales with the viewport instead of stepping at each breakpoint. */
+  font-size: clamp(28px, 7vw, 44px);
+}
+
+.jmp-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.jmp-two-col {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.jmp-salary-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 150px;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 0;
+}
+
+.jmp-search {
+  width: 190px;
+}
+
+/* The roles table has 7 columns and cannot usefully collapse — it scrolls
+   sideways inside its own container instead, so the page never does. */
+.jmp-table-wrap {
+  max-height: 560px;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.jmp-table-wrap table {
+  min-width: 720px;
+}
+
+/* ── Tablet ─────────────────────────────────────────────────────── */
+@media (max-width: 1024px) {
+  .jmp-page {
+    --jmp-gutter: 24px;
+  }
+
+  /* 4 across is unreadable well before it overflows. */
+  .jmp-metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .jmp-two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .jmp-hero {
+    padding: 40px 2px 32px;
+  }
+}
+
+/* ── Phone ──────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .jmp-page {
+    --jmp-gutter: 16px;
+    padding-bottom: 48px;
+  }
+
+  /* At this width the negative bleed pushes past the viewport edge. */
+  .jmp-header {
+    padding: 12px 14px;
+    margin: 0;
+    border-radius: 12px;
+  }
+
+  .jmp-hero {
+    padding: 28px 0 24px;
+  }
+
+  .jmp-metrics {
+    gap: 12px;
+  }
+
+  /* Label and range drop below the bar rather than being crushed into
+     90px and 150px columns. */
+  .jmp-salary-row {
+    grid-template-columns: 1fr auto;
+    gap: 6px 12px;
+    padding: 12px 0;
+  }
+
+  .jmp-salary-row > :nth-child(2) {
+    grid-column: 1 / -1;
+    order: 3;
+  }
+
+  /* Filters stack full width instead of overflowing their row. */
+  .jmp-filters {
+    width: 100%;
+  }
+
+  .jmp-filters > * {
+    flex: 1 1 auto;
+  }
+
+  .jmp-search {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* ── Small phone ────────────────────────────────────────────────── */
+@media (max-width: 420px) {
+  .jmp-metrics {
+    grid-template-columns: 1fr;
+  }
+}

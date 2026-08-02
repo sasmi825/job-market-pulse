@@ -30,15 +30,7 @@ export function MetricCards({
   const items = loading || error ? placeholders : metrics;
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(4, 1fr)",
-        gap: 16,
-        marginBottom: 24,
-      }}
-      className="jmp-metrics"
-    >
+    <div className="jmp-metrics">
       {items.map((m) => (
         <Card key={m.label} theme={theme} style={{ padding: "20px 22px" }}>
           <div style={{ fontSize: 13, color: theme.textSecondary }}>{m.label}</div>

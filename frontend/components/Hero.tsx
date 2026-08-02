@@ -28,11 +28,11 @@ export function Hero({
     companyCount != null ? Math.max(companyCount - companyNames.length, 0) : null;
 
   return (
-    <div style={{ padding: "56px 4px 40px" }}>
+    <div className="jmp-hero">
       <h1
+        className="jmp-hero-title"
         style={{
           margin: 0,
-          fontSize: 44,
           fontWeight: 600,
           letterSpacing: "-0.02em",
           lineHeight: 1.1,
