@@ -194,15 +194,16 @@ weeks.
 
 See the [README](../README.md#deployment).
 
-**Render redeploys automatically** on a push to `main` — its service was created
-from the GitHub repo.
+Both services redeploy automatically on a push to `main`.
 
-**Vercel does not.** That project was created with `vercel link` from the CLI,
-which sets up no Git integration, so frontend changes need an explicit deploy:
+**Vercel** requires **Root Directory = `frontend`** under *Settings → General*.
+The project was originally created with `vercel link` from inside `frontend/`,
+which recorded the root as `.` — correct for a CLI upload of that directory, but
+wrong once Git integration builds from the repository root, where there is no
+`package.json`.
+
+To deploy the frontend manually (bypassing Git):
 
 ```bash
 cd frontend && vercel --prod
 ```
-
-To get automatic deploys, connect the repo under the Vercel project's
-**Settings → Git**. Until then, a push alone will not update the dashboard.
