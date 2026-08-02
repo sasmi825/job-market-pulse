@@ -192,5 +192,17 @@ weeks.
 
 ## Deployment
 
-See the [README](../README.md#deployment). Push to `main` triggers automatic
-redeploys on both Render and Vercel.
+See the [README](../README.md#deployment).
+
+**Render redeploys automatically** on a push to `main` — its service was created
+from the GitHub repo.
+
+**Vercel does not.** That project was created with `vercel link` from the CLI,
+which sets up no Git integration, so frontend changes need an explicit deploy:
+
+```bash
+cd frontend && vercel --prod
+```
+
+To get automatic deploys, connect the repo under the Vercel project's
+**Settings → Git**. Until then, a push alone will not update the dashboard.
